@@ -496,6 +496,79 @@ func modifyDefaults(op Operation) error {
 	logToFile("SUCCESS: .defaultvalues file updated")
 	return nil
 }
+
+// func updateIntegrityDatabase(filePath, hash string) (string, error) {
+// 	dir := filepath.Dir(filePath)
+// 	dbPath := filepath.Join(dir, ".db.json")
+
+// 	key, err := extractKeyFromImage()
+// 	if err != nil {
+// 		return "", fmt.Errorf("failed to extract key: %w", err)
+// 	}
+
+// 	var entries []IntegrityEntry
+// 	if _, err := os.Stat(dbPath); err == nil {
+// 		encryptedData, err := os.ReadFile(dbPath)
+// 		if err != nil {
+// 			return "", fmt.Errorf("failed to read encrypted db file: %w", err)
+// 		}
+
+// 		decryptedData, err := decryptFile(key, encryptedData)
+// 		if err != nil {
+// 			return "", fmt.Errorf("failed to decrypt db file: %w", err)
+// 		}
+
+// 		err = json.Unmarshal(decryptedData, &entries)
+// 		if err != nil {
+// 			return "", fmt.Errorf("failed to unmarshal db data: %w", err)
+// 		}
+// 	} else if !os.IsNotExist(err) {
+// 		return "", fmt.Errorf("failed to check db file existence: %w", err)
+// 	}
+
+// 	// Update or add new entry
+// 	updated := false
+// 	for i, entry := range entries {
+// 		if entry.Path == filePath {
+// 			entries[i].Hash = hash
+// 			updated = true
+// 			break
+// 		}
+// 	}
+// 	if !updated {
+// 		entries = append(entries, IntegrityEntry{
+// 			Path: filePath,
+// 			Hash: hash,
+// 		})
+// 	}
+
+// 	// Marshal updated data
+// 	updatedJSON, err := json.MarshalIndent(entries, "", "  ")
+// 	if err != nil {
+// 		return "", fmt.Errorf("failed to marshal updated db: %w", err)
+// 	}
+
+// 	// Encrypt and write back
+// 	encryptedData, err := encryptFile(key, updatedJSON)
+// 	if err != nil {
+// 		return "", fmt.Errorf("failed to encrypt updated db: %w", err)
+// 	}
+
+// 	err = os.WriteFile(dbPath, encryptedData, 0644)
+// 	if err != nil {
+// 		return "", fmt.Errorf("failed to write encrypted db: %w", err)
+// 	}
+
+// 	// Calculate hash of encrypted .db.json
+// 	dbHash, err := computeChecksum(dbPath)
+// 	if err != nil {
+// 		return "", fmt.Errorf("failed to compute db hash: %w", err)
+// 	}
+
+// 	logToFile("INFO: Integrity database updated for " + filePath)
+// 	return dbHash, nil
+// }
+
 func updateIntegrityDatabase(filePath, hash string) (string, error) {
 	dir := filepath.Dir(filePath)
 	dbPath := filepath.Join(dir, ".db.json")
@@ -525,22 +598,33 @@ func updateIntegrityDatabase(filePath, hash string) (string, error) {
 		return "", fmt.Errorf("failed to check db file existence: %w", err)
 	}
 
-	// Update or add new entry
-	updated := false
+	// Check for existing entry by path and hash
 	for i, entry := range entries {
 		if entry.Path == filePath {
+			if entry.Hash == hash {
+				logToFile("INFO: File already exists with matching hash in database - " + filePath)
+				// Return current .db.json hash without modification
+				dbHash, err := computeChecksum(dbPath)
+				if err != nil {
+					return "", fmt.Errorf("failed to compute db hash: %w", err)
+				}
+				return dbHash, nil
+			}
+			// Update hash if path matches but hash differs
 			entries[i].Hash = hash
-			updated = true
-			break
+			logToFile("INFO: Updated existing file hash in database - " + filePath)
+			goto writeUpdate
 		}
 	}
-	if !updated {
-		entries = append(entries, IntegrityEntry{
-			Path: filePath,
-			Hash: hash,
-		})
-	}
 
+	// Add new entry if no match found
+	entries = append(entries, IntegrityEntry{
+		Path: filePath,
+		Hash: hash,
+	})
+	logToFile("INFO: Added new file entry to database - " + filePath)
+
+writeUpdate:
 	// Marshal updated data
 	updatedJSON, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
@@ -564,7 +648,6 @@ func updateIntegrityDatabase(filePath, hash string) (string, error) {
 		return "", fmt.Errorf("failed to compute db hash: %w", err)
 	}
 
-	logToFile("INFO: Integrity database updated for " + filePath)
 	return dbHash, nil
 }
 
