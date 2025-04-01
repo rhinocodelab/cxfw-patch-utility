@@ -182,6 +182,12 @@ func addFile(op Operation) error {
 	return nil
 }
 
+// Helper function to extract filename from a path
+func getFileName(filePath string) string {
+	parts := strings.Split(filePath, "/")
+	return parts[len(parts)-1]
+}
+
 // Helper function to copy file contents
 func copyFile(src, dst string) error {
 	sourceFile, err := os.Open(src)
@@ -209,79 +215,23 @@ func copyFile(src, dst string) error {
 	return os.Chmod(dst, srcInfo.Mode())
 }
 
-// func removeFile(op Operation) error {
-// 	if op.Path == "" {
-// 		logToFile("ERROR: Invalid remove operation, missing path")
-// 		return fmt.Errorf("invalid remove operation, missing path")
-// 	}
-
-// 	backupPath := backupDir + "/" + strings.ReplaceAll(op.Path, "/", "_")
-// 	if err := os.MkdirAll(backupDir, 0755); err != nil {
-// 		logToFile("ERROR: Failed to create backup directory - " + err.Error())
-// 		return fmt.Errorf("failed to create backup directory: %w", err)
-// 	}
-
-// 	if _, err := os.Stat(op.Path); err == nil {
-// 		logToFile("INFO: Backing up file to restore backup folder: " + op.Path)
-// 		if err := os.Rename(op.Path, backupPath); err != nil {
-// 			logToFile("ERROR: Failed to back up file - " + err.Error())
-// 			return fmt.Errorf("failed to back up file: %w", err)
-// 		}
-// 		logToFile("SUCCESS: File backed up successfully - " + backupPath)
-// 	} else if os.IsNotExist(err) {
-// 		logToFile("WARNING: File does not exist, skipping backup - " + op.Path)
-// 	} else {
-// 		logToFile("ERROR: Failed to check file existence - " + err.Error())
-// 		return fmt.Errorf("failed to check file existence: %w", err)
-// 	}
-
-// 	// Remove the file
-// 	logToFile("INFO: Removing file " + op.Path)
-// 	if err := os.Remove(op.Path); err != nil {
-// 		logToFile("ERROR: Failed to remove file - " + err.Error())
-// 		return fmt.Errorf("failed to remove file: %w", err)
-// 	}
-
-// 	logToFile("SUCCESS: File removed successfully - " + op.Path)
-// 	return nil
-// }
-
 func removeFile(op Operation) error {
 	if op.Path == "" {
 		logToFile("ERROR: Invalid remove operation, missing path")
 		return fmt.Errorf("invalid remove operation, missing path")
 	}
 
-	// Step 1: Copy file to backup directory
-	backupPath := filepath.Join(backupDir, strings.ReplaceAll(op.Path, "/", "_"))
+	backupPath := backupDir + "/" + strings.ReplaceAll(op.Path, "/", "_")
 	if err := os.MkdirAll(backupDir, 0755); err != nil {
 		logToFile("ERROR: Failed to create backup directory - " + err.Error())
 		return fmt.Errorf("failed to create backup directory: %w", err)
 	}
 
 	if _, err := os.Stat(op.Path); err == nil {
-		logToFile("INFO: Copying file to backup: " + op.Path + " -> " + backupPath)
-		if err := copyFile(op.Path, backupPath); err != nil {
-			logToFile("ERROR: Failed to copy file to backup - " + err.Error())
-			return fmt.Errorf("failed to copy file to backup: %w", err)
-		}
-
-		// Step 2: Verify checksum of copied file
-		backupChecksum, err := computeChecksum(backupPath)
-		if err != nil {
-			logToFile("ERROR: Failed to compute backup checksum - " + err.Error())
-			return fmt.Errorf("failed to compute backup checksum: %w", err)
-		}
-
-		originalChecksum, err := computeChecksum(op.Path)
-		if err != nil {
-			logToFile("ERROR: Failed to compute original checksum - " + err.Error())
-			return fmt.Errorf("failed to compute original checksum: %w", err)
-		}
-
-		if backupChecksum != originalChecksum {
-			logToFile("ERROR: Backup checksum mismatch for " + backupPath)
-			return fmt.Errorf("backup checksum mismatch: expected %s, got %s", originalChecksum, backupChecksum)
+		logToFile("INFO: Backing up file to restore backup folder: " + op.Path)
+		if err := os.Rename(op.Path, backupPath); err != nil {
+			logToFile("ERROR: Failed to back up file - " + err.Error())
+			return fmt.Errorf("failed to back up file: %w", err)
 		}
 		logToFile("SUCCESS: File backed up successfully - " + backupPath)
 	} else if os.IsNotExist(err) {
@@ -291,102 +241,15 @@ func removeFile(op Operation) error {
 		return fmt.Errorf("failed to check file existence: %w", err)
 	}
 
-	// Step 3: Remove hash from integrity database and update folder-specific JSON
-	if _, err := os.Stat(op.Path); err == nil {
-		dbHash, err := removeFromIntegrityDatabase(op.Path)
-		if err != nil {
-			logToFile("ERROR: Failed to update integrity database - " + err.Error())
-			return fmt.Errorf("failed to update integrity database: %w", err)
-		}
-
-		dir := filepath.Dir(op.Path)
-		err = updateFolderFile(dir, dbHash)
-		if err != nil {
-			logToFile("ERROR: Failed to update folder file - " + err.Error())
-			return fmt.Errorf("failed to update folder file: %w", err)
-		}
-	}
-
-	// Remove the original file
+	// Remove the file
 	logToFile("INFO: Removing file " + op.Path)
-	if err := os.Remove(op.Path); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(op.Path); err != nil {
 		logToFile("ERROR: Failed to remove file - " + err.Error())
 		return fmt.Errorf("failed to remove file: %w", err)
 	}
 
 	logToFile("SUCCESS: File removed successfully - " + op.Path)
 	return nil
-}
-
-func removeFromIntegrityDatabase(filePath string) (string, error) {
-	dir := filepath.Dir(filePath)
-	dbPath := filepath.Join(dir, ".db.json")
-
-	key, err := extractKeyFromImage()
-	if err != nil {
-		return "", fmt.Errorf("failed to extract key: %w", err)
-	}
-
-	var entries []IntegrityEntry
-	if _, err := os.Stat(dbPath); err == nil {
-		encryptedData, err := os.ReadFile(dbPath)
-		if err != nil {
-			return "", fmt.Errorf("failed to read encrypted db file: %w", err)
-		}
-
-		decryptedData, err := decryptFile(key, encryptedData)
-		if err != nil {
-			return "", fmt.Errorf("failed to decrypt db file: %w", err)
-		}
-
-		err = json.Unmarshal(decryptedData, &entries)
-		if err != nil {
-			return "", fmt.Errorf("failed to unmarshal db data: %w", err)
-		}
-	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("failed to check db file existence: %w", err)
-	}
-
-	// Remove the entry for the file
-	updatedEntries := []IntegrityEntry{}
-	found := false
-	for _, entry := range entries {
-		if entry.Path != filePath {
-			updatedEntries = append(updatedEntries, entry)
-		} else {
-			found = true
-		}
-	}
-
-	if !found && len(entries) > 0 {
-		logToFile("WARNING: File hash not found in integrity database - " + filePath)
-	}
-
-	// Marshal updated data
-	updatedJSON, err := json.MarshalIndent(updatedEntries, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal updated db: %w", err)
-	}
-
-	// Encrypt and write back
-	encryptedData, err := encryptFile(key, updatedJSON)
-	if err != nil {
-		return "", fmt.Errorf("failed to encrypt updated db: %w", err)
-	}
-
-	err = os.WriteFile(dbPath, encryptedData, 0644)
-	if err != nil {
-		return "", fmt.Errorf("failed to write encrypted db: %w", err)
-	}
-
-	// Calculate hash of encrypted .db.json
-	dbHash, err := computeChecksum(dbPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to compute db hash: %w", err)
-	}
-
-	logToFile("INFO: Integrity database updated - removed entry for " + filePath)
-	return dbHash, nil
 }
 
 func executeCommand(op Operation) error {
