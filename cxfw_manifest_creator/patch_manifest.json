@@ -1,0 +1,12 @@
+{
+  "version": "1.0",
+  "operations": [
+    {
+      "operation": "add",
+      "path": "/sda1/data/apps",
+      "source": "/tmp/app1.bin",
+      "checksum": "25e6043ef9cb46df1c3433984f9127d41aac3ab715171c751a28c5108a70adcf",
+      "size": 5
+    }
+  ]
+}

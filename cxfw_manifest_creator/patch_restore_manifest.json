@@ -1,0 +1,9 @@
+{
+  "version": "1.0",
+  "operations": [
+    {
+      "operation": "remove",
+      "path": "/sda1/data/apps/app1.bin"
+    }
+  ]
+}

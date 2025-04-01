@@ -1,0 +1,227 @@
+package main
+
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"strings"
+)
+
+// Manifest structure
+type Manifest struct {
+	Version    string      `json:"version"`
+	Operations []Operation `json:"operations"`
+}
+
+// Operation structure
+type Operation struct {
+	Operation string                 `json:"operation"`
+	Entries   map[string]interface{} `json:"entries,omitempty"`
+}
+
+func main() {
+	// Define CLI arguments
+	manifestPath := flag.String("manifest", "", "Path to patch_manifest.json")
+	flag.Parse()
+
+	// Validate argument
+	if *manifestPath == "" {
+		fmt.Println("Error: Please provide the path to patch_manifest.json using --manifest")
+		os.Exit(1)
+	}
+
+	// File paths
+	restoreManifestPath := "patch_defaultvalue_restore_manifest.json"
+	defaultValuesPath := "/sda1/data/.defaultvalues"
+
+	// Read patch_manifest.json
+	data, err := os.ReadFile(*manifestPath)
+	if err != nil {
+		fmt.Println("Error reading", *manifestPath, ":", err)
+		os.Exit(1)
+	}
+
+	// Debug: Print the raw file content
+	fmt.Println("File content:", string(data))
+
+	var manifest Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		fmt.Println("Error parsing JSON:", err)
+		os.Exit(1)
+	}
+
+	// Debug: Print the parsed manifest
+	fmt.Printf("Parsed manifest version: %s\n", manifest.Version)
+	fmt.Printf("Found %d operations\n", len(manifest.Operations))
+
+	// Print all operations for debugging
+	for i, op := range manifest.Operations {
+		fmt.Printf("Operation %d: %s\n", i+1, op.Operation)
+	}
+
+	// Find modify_defaults operation
+	foundModifyDefaults := false
+	originalDefaults := make(map[string]string)
+	for _, op := range manifest.Operations {
+		fmt.Printf("Checking operation: %s\n", op.Operation)
+		if op.Operation == "modify_defaults" {
+			foundModifyDefaults = true
+			fmt.Println("Found modify_defaults operation")
+
+			// Debug: Print the entries
+			fmt.Printf("Entries: %+v\n", op.Entries)
+
+			// Flatten nested entries, ignoring "global" prefix
+			entries, err := flattenEntries(op.Entries)
+			if err != nil {
+				fmt.Println("Error flattening entries:", err)
+				os.Exit(1)
+			}
+
+			// Debug: Print flattened entries
+			fmt.Printf("Flattened entries: %+v\n", entries)
+
+			// Read original values from .defaultvalues
+			originalDefaults = readDefaultValues(defaultValuesPath, entries)
+
+			// Debug: Print original defaults
+			fmt.Printf("Original defaults: %+v\n", originalDefaults)
+			break
+		}
+	}
+
+	// If no modify_defaults found, exit
+	if !foundModifyDefaults {
+		fmt.Println("No modify_defaults operation found. No restore file created.")
+		return
+	}
+
+	// Create restore manifest
+	restoreManifest := Manifest{
+		Version: "1.0",
+		Operations: []Operation{
+			{
+				Operation: "modify_defaults",
+				Entries:   toInterfaceMap(originalDefaults),
+			},
+		},
+	}
+
+	// Save patch_defaultvalue_restore_manifest.json
+	restoreData, err := json.MarshalIndent(restoreManifest, "", "  ")
+	if err != nil {
+		fmt.Println("Error creating restore JSON:", err)
+		os.Exit(1)
+	}
+
+	if err := os.WriteFile(restoreManifestPath, restoreData, 0644); err != nil {
+		fmt.Println("Error writing restore JSON:", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Restore manifest created:", restoreManifestPath)
+}
+
+// Flattens nested map into a single-level map[string]string, ignoring "global" prefix
+func flattenEntries(entries map[string]interface{}) (map[string]string, error) {
+	result := make(map[string]string)
+	for key, value := range entries {
+		if key == "global" {
+			// If the key is "global", process its nested map directly
+			if nested, ok := value.(map[string]interface{}); ok {
+				for subKey, subValue := range nested {
+					switch sv := subValue.(type) {
+					case string:
+						result[subKey] = sv
+					default:
+						return nil, fmt.Errorf("unsupported nested value type for %s: %T", subKey, subValue)
+					}
+				}
+			} else {
+				return nil, fmt.Errorf("value of 'global' must be a nested object, got %T", value)
+			}
+		} else {
+			// Handle non-"global" keys (if any)
+			switch v := value.(type) {
+			case string:
+				result[key] = v
+			case map[string]interface{}:
+				for subKey, subValue := range v {
+					switch sv := subValue.(type) {
+					case string:
+						result[key+"."+subKey] = sv
+					default:
+						return nil, fmt.Errorf("unsupported nested value type for %s.%s: %T", key, subKey, subValue)
+					}
+				}
+			default:
+				return nil, fmt.Errorf("unsupported value type for %s: %T", key, value)
+			}
+		}
+	}
+	return result, nil
+}
+
+// Converts string map back to interface{} map for JSON marshaling
+func toInterfaceMap(m map[string]string) map[string]interface{} {
+	result := make(map[string]interface{})
+	for k, v := range m {
+		result[k] = v
+	}
+	return result
+}
+
+// Reads original default values from the .defaultvalues file
+func readDefaultValues(filePath string, keys map[string]string) map[string]string {
+	originalDefaults := make(map[string]string)
+
+	// Read .defaultvalues file
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		fmt.Println("Warning: Unable to read .defaultvalues file:", err)
+		return originalDefaults
+	}
+
+	// Parse the file line by line
+	lines := string(data)
+	for _, line := range splitLines(lines) {
+		if key, value, found := parseKeyValue(line); found {
+			if _, exists := keys[key]; exists {
+				originalDefaults[key] = value
+			}
+		}
+	}
+
+	return originalDefaults
+}
+
+// Splits string into lines (handles both LF and CRLF)
+func splitLines(s string) []string {
+	var lines []string
+	start := 0
+	for i, c := range s {
+		if c == '\n' {
+			lines = append(lines, s[start:i])
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		lines = append(lines, s[start:])
+	}
+	return lines
+}
+
+// Parses "key=value" format
+func parseKeyValue(line string) (string, string, bool) {
+	parts := strings.Split(line, "=")
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	key := strings.TrimSpace(parts[0])
+	value := strings.TrimSpace(parts[1])
+	if key == "" {
+		return "", "", false
+	}
+	return key, value, true
+}
