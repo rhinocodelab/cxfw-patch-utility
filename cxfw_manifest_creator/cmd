@@ -1,0 +1,1 @@
+./firmware_patch_creator.py --add /sda1/data/apps/app1.bin --remove /sda1/data/basic/app2.bin --command "touch /tmp/pokhriyal" --modify-defaults "Auto Login:autologin=0" "CheckCertificate=1" "Prashant=active"
