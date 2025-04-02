@@ -2,7 +2,7 @@
 GO := go
 
 # Binary name
-BINARY := generate_defaultvalue_restore
+BINARY := generate_defaultvalues_comparison
 
 # Source file
 SRC := main.go

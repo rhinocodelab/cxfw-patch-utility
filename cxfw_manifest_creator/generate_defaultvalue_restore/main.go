@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -8,196 +9,294 @@ import (
 	"strings"
 )
 
-// Manifest structure
 type Manifest struct {
 	Version    string      `json:"version"`
 	Operations []Operation `json:"operations"`
 }
 
-// Operation structure
 type Operation struct {
-	Operation string                 `json:"operation"`
-	Entries   map[string]interface{} `json:"entries,omitempty"`
+	Type    string                       `json:"operation"`
+	Entries map[string]map[string]string `json:"entries,omitempty"`
+}
+
+type OutputEntry struct {
+	CurrentValue string `json:"current_value"`
+	NewValue     string `json:"new_value"`
+	Exists       bool   `json:"exists"`
+}
+
+type Output map[string]map[string]OutputEntry
+
+// parseDefaultValues parses the .defaultvalues file into a map of sections and key-value pairs
+func parseDefaultValues(filePath string) (map[string]map[string]string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	sections := make(map[string]map[string]string)
+	currentSection := "" // Default/unscoped section for KEY = VALUE entries
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		fmt.Printf("Debug: Processing line: %q\n", line)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			currentSection = "" // Reset to unscoped after blank line or comment
+			fmt.Printf("Debug: Resetting to unscoped section\n")
+			continue
+		}
+
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			currentSection = strings.TrimSpace(line[1 : len(line)-1])
+			fmt.Printf("Debug: Switching to section: %q\n", currentSection)
+			if _, exists := sections[currentSection]; !exists {
+				sections[currentSection] = make(map[string]string)
+			}
+			continue
+		}
+
+		if strings.Contains(line, "=") {
+			parts := strings.SplitN(line, "=", 2)
+			key := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+			fmt.Printf("Debug: Found key-value: %s = %s in section %q\n", key, value, currentSection)
+			if _, exists := sections[currentSection]; !exists {
+				sections[currentSection] = make(map[string]string)
+			}
+			sections[currentSection][key] = value
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return sections, nil
+}
+
+// updateDefaultValues updates the .defaultvalues file based on defaultvalues_comparison.json
+func updateDefaultValues(defaultValuesPath string, comparisonJSONPath string) error {
+	// Read the comparison JSON
+	outputData, err := os.ReadFile(comparisonJSONPath)
+	if err != nil {
+		return fmt.Errorf("error reading comparison JSON file: %v", err)
+	}
+
+	var output Output
+	if err := json.Unmarshal(outputData, &output); err != nil {
+		return fmt.Errorf("error parsing comparison JSON: %v", err)
+	}
+
+	// Read the current .defaultvalues content to preserve order and comments
+	file, err := os.Open(defaultValuesPath)
+	if err != nil {
+		return fmt.Errorf("error opening .defaultvalues file: %v", err)
+	}
+	defer file.Close()
+
+	lines := []string{}
+	scanner := bufio.NewScanner(file)
+	currentSection := ""
+	sectionKeys := make(map[string]map[string]bool) // Track updated keys per section
+
+	for scanner.Scan() {
+		line := scanner.Text() // Preserve original formatting
+		trimmedLine := strings.TrimSpace(line)
+
+		if trimmedLine == "" || strings.HasPrefix(trimmedLine, "#") || strings.HasPrefix(trimmedLine, ";") {
+			lines = append(lines, line)
+			currentSection = ""
+			continue
+		}
+
+		if strings.HasPrefix(trimmedLine, "[") && strings.HasSuffix(trimmedLine, "]") {
+			currentSection = strings.TrimSpace(trimmedLine[1 : len(trimmedLine)-1])
+			lines = append(lines, line)
+			continue
+		}
+
+		if strings.Contains(trimmedLine, "=") {
+			parts := strings.SplitN(trimmedLine, "=", 2)
+			key := strings.TrimSpace(parts[0])
+			section := currentSection
+			if section == "" {
+				section = "unscoped"
+			}
+
+			if sectionData, exists := output[section]; exists {
+				if entry, keyExists := sectionData[key]; keyExists {
+					// Update existing entry with new value
+					lines = append(lines, fmt.Sprintf("%s = %s", key, entry.NewValue))
+					if _, ok := sectionKeys[section]; !ok {
+						sectionKeys[section] = make(map[string]bool)
+					}
+					sectionKeys[section][key] = true
+					continue
+				}
+			}
+			// Keep unchanged lines
+			lines = append(lines, line)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("error reading .defaultvalues: %v", err)
+	}
+
+	// Add new unscoped entries first
+	if unscopedData, exists := output["unscoped"]; exists {
+		for key, entry := range unscopedData {
+			if !entry.Exists {
+				if _, ok := sectionKeys[""]; !ok {
+					sectionKeys[""] = make(map[string]bool)
+					lines = append(lines, "") // Add newline before unscoped entries
+				}
+				lines = append(lines, fmt.Sprintf("%s = %s", key, entry.NewValue))
+				sectionKeys[""][key] = true
+			}
+		}
+	}
+
+	// Add new INI sections
+	for section, keys := range output {
+		if section == "unscoped" {
+			continue // Already handled above
+		}
+		iniSection := section
+		for key, entry := range keys {
+			if !entry.Exists {
+				if _, exists := sectionKeys[iniSection]; !exists {
+					lines = append(lines, "", fmt.Sprintf("[%s]", iniSection))
+					sectionKeys[iniSection] = make(map[string]bool)
+				}
+				lines = append(lines, fmt.Sprintf("%s = %s", key, entry.NewValue))
+				sectionKeys[iniSection][key] = true
+			}
+		}
+	}
+
+	// Write updated content back to .defaultvalues
+	return os.WriteFile(defaultValuesPath, []byte(strings.Join(lines, "\n")+"\n"), 0644)
 }
 
 func main() {
-	// Define CLI arguments
-	manifestPath := flag.String("manifest", "", "Path to patch_manifest.json")
+	inputFile := flag.String("input", "", "Path to the input JSON manifest file")
+	restore := flag.Bool("restore", false, "Update .defaultvalues using defaultvalues_comparison.json")
 	flag.Parse()
 
-	if *manifestPath == "" {
-		fmt.Println("Error: Please provide the path to patch_manifest.json using --manifest")
+	if *inputFile == "" && !*restore {
+		fmt.Println("Error: Please provide an input JSON file using --input or use --restore")
+		fmt.Println("Usage: generate_defaultvalues_comparison --input <path_to_json> [--restore]")
 		os.Exit(1)
 	}
 
-	restoreManifestPath := "patch_defaultvalue_restore_manifest.json"
-	defaultValuesPath := "/sda1/data/.defaultvalues"
-
-	// Read patch_manifest.json
-	data, err := os.ReadFile(*manifestPath)
-	if err != nil {
-		fmt.Println("Error reading", *manifestPath, ":", err)
-		os.Exit(1)
-	}
-
-	var manifest Manifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		fmt.Println("Error parsing JSON:", err)
-		os.Exit(1)
-	}
-
-	// Find modify_defaults operation
-	modifiedEntries := make(map[string]string)
-	foundModifyDefaults := false
-
-	for _, op := range manifest.Operations {
-		if op.Operation == "modify_defaults" {
-			foundModifyDefaults = true
-			modifiedEntries, err = flattenEntries(op.Entries)
-			if err != nil {
-				fmt.Println("Error flattening entries:", err)
-				os.Exit(1)
-			}
-			break
+	// Step 1: Generate the comparison JSON if --input is provided
+	if *inputFile != "" {
+		manifestData, err := os.ReadFile(*inputFile)
+		if err != nil {
+			fmt.Printf("Error reading input file: %v\n", err)
+			os.Exit(1)
 		}
-	}
 
-	if !foundModifyDefaults {
-		fmt.Println("No modify_defaults operation found. No restore file created.")
-		return
-	}
+		var manifest Manifest
+		if err := json.Unmarshal(manifestData, &manifest); err != nil {
+			fmt.Printf("Error parsing JSON: %v\n", err)
+			os.Exit(1)
+		}
 
-	// Read original values from .defaultvalues
-	originalDefaults := readDefaultValues(defaultValuesPath, modifiedEntries)
+		var modifyDefaultsEntries map[string]map[string]string
+		for _, op := range manifest.Operations {
+			if op.Type == "modify_defaults" {
+				modifyDefaultsEntries = op.Entries
+				break
+			}
+		}
 
-	// Create restore manifest
-	restoreManifest := Manifest{
-		Version:    "1.0",
-		Operations: []Operation{},
-	}
+		if modifyDefaultsEntries == nil {
+			fmt.Println("No 'modify_defaults' operation found in the manifest")
+			os.Exit(0)
+		}
 
-	// Ensure only `modify_defaults` is used for restoring values
-	if len(originalDefaults) > 0 {
-		restoreManifest.Operations = append(restoreManifest.Operations, Operation{
-			Operation: "modify_defaults",
-			Entries:   toInterfaceMap(originalDefaults),
-		})
-	}
+		defaultValues, err := parseDefaultValues("/sda1/data/.defaultvalues")
+		if err != nil {
+			fmt.Printf("Error parsing .defaultvalues file: %v\n", err)
+			os.Exit(1)
+		}
 
-	// Save patch_defaultvalue_restore_manifest.json
-	restoreData, err := json.MarshalIndent(restoreManifest, "", "  ")
-	if err != nil {
-		fmt.Println("Error creating restore JSON:", err)
-		os.Exit(1)
-	}
+		fmt.Println("Debug: Parsed .defaultvalues:")
+		for section, keys := range defaultValues {
+			fmt.Printf("Section: %q\n", section)
+			for key, value := range keys {
+				fmt.Printf("  %s = %s\n", key, value)
+			}
+		}
 
-	if err := os.WriteFile(restoreManifestPath, restoreData, 0600); err != nil {
-		fmt.Println("Error writing restore JSON:", err)
-		os.Exit(1)
-	}
+		output := make(Output)
 
-	fmt.Println("Restore manifest created:", restoreManifestPath)
-}
+		for sectionName, keys := range modifyDefaultsEntries {
+			outputSectionName := sectionName
+			iniSectionName := sectionName
 
-// Flattens nested map while preserving section headers like "[Auto Login]"
-func flattenEntries(entries map[string]interface{}) (map[string]string, error) {
-	result := make(map[string]string)
-	for key, value := range entries {
-		if nested, ok := value.(map[string]interface{}); ok {
-			for subKey, subValue := range nested {
-				if sv, ok := subValue.(string); ok {
-					result[key+"."+subKey] = sv
-				} else {
-					return nil, fmt.Errorf("unsupported nested value type for %s.%s: %T", key, subKey, subValue)
+			if sectionName == "global" {
+				iniSectionName = ""
+				outputSectionName = "unscoped"
+			}
+
+			fmt.Printf("Debug: Processing section %q (mapped to %q in .defaultvalues)\n", outputSectionName, iniSectionName)
+
+			if _, exists := output[outputSectionName]; !exists {
+				output[outputSectionName] = make(map[string]OutputEntry)
+			}
+
+			for key, newValue := range keys {
+				var currentValue string
+				exists := false
+
+				if sectionData, sectionExists := defaultValues[iniSectionName]; sectionExists {
+					if val, keyExists := sectionData[key]; keyExists {
+						currentValue = val
+						exists = true
+					}
+				}
+				fmt.Printf("Debug: Key %q - Current: %q, New: %q, Exists: %v\n", key, currentValue, newValue, exists)
+
+				output[outputSectionName][key] = OutputEntry{
+					CurrentValue: currentValue,
+					NewValue:     newValue,
+					Exists:       exists,
 				}
 			}
-		} else if sv, ok := value.(string); ok {
-			result[key] = sv
-		} else {
-			return nil, fmt.Errorf("unsupported value type for %s: %T", key, value)
-		}
-	}
-	return result, nil
-}
-
-// Converts string map to interface{} map
-func toInterfaceMap(m map[string]string) map[string]interface{} {
-	result := make(map[string]interface{})
-	for k, v := range m {
-		result[k] = v
-	}
-	return result
-}
-
-// Reads .defaultvalues and restores correct keys
-func readDefaultValues(filePath string, modifiedEntries map[string]string) map[string]string {
-	originalDefaults := make(map[string]string)
-
-	// Read .defaultvalues
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		fmt.Println("Warning: Unable to read .defaultvalues file:", err)
-		return originalDefaults
-	}
-
-	// Track the current section header
-	var currentSection string
-
-	// Parse line by line
-	for _, line := range splitLines(string(data)) {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
 		}
 
-		// Check if line is a section header
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			currentSection = line
-			continue
+		outputJSON, err := json.MarshalIndent(output, "", "  ")
+		if err != nil {
+			fmt.Printf("Error marshaling output JSON: %v\n", err)
+			os.Exit(1)
 		}
 
-		// Parse key=value
-		if key, value, found := parseKeyValue(line); found {
-			fullKey := key
-			if currentSection != "" {
-				fullKey = currentSection + "." + key
-			}
-
-			// Restore only if it was modified
-			if _, exists := modifiedEntries[fullKey]; exists {
-				originalDefaults[fullKey] = value
-			} else if currentSection == "" { // Handling global entries
-				originalDefaults[key] = value
-			}
+		defaultOutputFile := "defaultvalues_comparison.json"
+		if err := os.WriteFile(defaultOutputFile, outputJSON, 0644); err != nil {
+			fmt.Printf("Error writing output file: %v\n", err)
+			os.Exit(1)
 		}
+
+		fmt.Printf("Comparison JSON file created: %s\n", defaultOutputFile)
 	}
 
-	return originalDefaults
-}
-
-// Splits string into lines
-func splitLines(s string) []string {
-	var lines []string
-	start := 0
-	for i, c := range s {
-		if c == '\n' {
-			lines = append(lines, s[start:i])
-			start = i + 1
+	// Step 2: Update .defaultvalues if --restore is provided
+	if *restore {
+		comparisonFile := "defaultvalues_comparison.json"
+		if _, err := os.Stat(comparisonFile); os.IsNotExist(err) {
+			fmt.Printf("Error: %s does not exist. Run with --input first to generate it.\n", comparisonFile)
+			os.Exit(1)
 		}
-	}
-	if start < len(s) {
-		lines = append(lines, s[start:])
-	}
-	return lines
-}
 
-// Parses "key=value" format
-func parseKeyValue(line string) (string, string, bool) {
-	parts := strings.SplitN(line, "=", 2)
-	if len(parts) != 2 {
-		return "", "", false
+		if err := updateDefaultValues("/sda1/data/.defaultvalues", comparisonFile); err != nil {
+			fmt.Printf("Error updating .defaultvalues: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Updated /sda1/data/.defaultvalues based on", comparisonFile)
 	}
-	key := strings.TrimSpace(parts[0])
-	value := strings.TrimSpace(parts[1])
-	return key, value, key != ""
 }
