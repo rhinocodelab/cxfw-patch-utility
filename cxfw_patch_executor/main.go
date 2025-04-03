@@ -45,7 +45,7 @@ type FolderEntry struct {
 }
 
 const logFile = "/var/log/cxfw_patch.log"
-const backupDir = "/sda1/data/restore/backup"
+const backupDir = "/sda1/data/cxfw/rollback"
 
 func main() {
 	if len(os.Args) < 2 {

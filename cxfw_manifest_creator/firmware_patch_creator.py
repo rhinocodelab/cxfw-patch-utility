@@ -123,15 +123,15 @@ class FirmwarePatchCreator:
             sys.exit(1)
 
         # Save patch_restore_manifest.json
-        restore_manifest_name = "patch_restore_manifest.json"
+        restore_manifest_name = "patch_rollback_manifest.json"
         restore_manifest = {"version": "1.0", "operations": restore_operations}
 
         try:
             with open(restore_manifest_name, "w") as f:
                 json.dump(restore_manifest, f, indent=2)
-            print(f"Firmware restore manifest created: {restore_manifest_name}")
+            print(f"Firmware rollback manifest created: {restore_manifest_name}")
         except Exception as e:
-            print(f"Error saving restore manifest: {e}")
+            print(f"Error saving rollback manifest: {e}")
             sys.exit(1)
 
     def parse_modify_defaults(self, modify_defaults: List[str]) -> Dict[str, Dict[str, str]]:

@@ -276,7 +276,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		defaultOutputFile := "defaultvalues_comparison.json"
+		defaultOutputFile := "/tmp/defaultvalues_comparison.json"
 		if err := os.WriteFile(defaultOutputFile, outputJSON, 0644); err != nil {
 			fmt.Printf("Error writing output file: %v\n", err)
 			os.Exit(1)
