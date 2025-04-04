@@ -44,7 +44,7 @@ type FolderEntry struct {
 	Hash string `json:"hash"`
 }
 
-const logFile = "/var/log/cxfw_patch.log"
+const logFile = "/newroot/var/log/cxfw_patch.log"
 const backupDir = "/sda1/data/cxfw/rollback"
 
 func main() {
@@ -126,7 +126,7 @@ func computeChecksum(filePath string) (string, error) {
 func addFile(op Operation) error {
 	if op.Source == "" || op.Path == "" {
 		logToFile("ERROR: Invalid add operation, missing source or path")
-		return fmt.Errorf("invalid add operation, missing source or path")
+		os.Exit(1)
 	}
 
 	// Step 1: Copy file to destination
@@ -135,26 +135,26 @@ func addFile(op Operation) error {
 
 	if err := os.MkdirAll(op.Path, 0755); err != nil {
 		logToFile("ERROR: Failed to create directory - " + op.Path)
-		return fmt.Errorf("failed to create directory: %w", err)
+		os.Exit(1)
 	}
 
 	logToFile("INFO: Copying file from " + op.Source + " to " + destFile)
 	err := copyFile(op.Source, destFile)
 	if err != nil {
 		logToFile("ERROR: Failed to copy file - " + err.Error())
-		return fmt.Errorf("failed to copy file: %w", err)
+		os.Exit(1)
 	}
 
 	// Step 2: Verify checksum of copied file
 	copiedChecksum, err := computeChecksum(destFile)
 	if err != nil {
 		logToFile("ERROR: Failed to compute checksum of copied file - " + err.Error())
-		return fmt.Errorf("failed to compute checksum: %w", err)
+		os.Exit(1)
 	}
 
 	if copiedChecksum != op.Checksum {
 		logToFile("ERROR: Checksum mismatch for copied file " + destFile)
-		return fmt.Errorf("checksum mismatch for %s: expected %s, got %s", destFile, op.Checksum, copiedChecksum)
+		os.Exit(1)
 	}
 
 	// Step 3: Update integrity database and get encrypted .db.json hash
@@ -209,86 +209,49 @@ func copyFile(src, dst string) error {
 	return os.Chmod(dst, srcInfo.Mode())
 }
 
-// func removeFile(op Operation) error {
-// 	if op.Path == "" {
-// 		logToFile("ERROR: Invalid remove operation, missing path")
-// 		return fmt.Errorf("invalid remove operation, missing path")
-// 	}
-
-// 	backupPath := backupDir + "/" + strings.ReplaceAll(op.Path, "/", "_")
-// 	if err := os.MkdirAll(backupDir, 0755); err != nil {
-// 		logToFile("ERROR: Failed to create backup directory - " + err.Error())
-// 		return fmt.Errorf("failed to create backup directory: %w", err)
-// 	}
-
-// 	if _, err := os.Stat(op.Path); err == nil {
-// 		logToFile("INFO: Backing up file to restore backup folder: " + op.Path)
-// 		if err := os.Rename(op.Path, backupPath); err != nil {
-// 			logToFile("ERROR: Failed to back up file - " + err.Error())
-// 			return fmt.Errorf("failed to back up file: %w", err)
-// 		}
-// 		logToFile("SUCCESS: File backed up successfully - " + backupPath)
-// 	} else if os.IsNotExist(err) {
-// 		logToFile("WARNING: File does not exist, skipping backup - " + op.Path)
-// 	} else {
-// 		logToFile("ERROR: Failed to check file existence - " + err.Error())
-// 		return fmt.Errorf("failed to check file existence: %w", err)
-// 	}
-
-// 	// Remove the file
-// 	logToFile("INFO: Removing file " + op.Path)
-// 	if err := os.Remove(op.Path); err != nil {
-// 		logToFile("ERROR: Failed to remove file - " + err.Error())
-// 		return fmt.Errorf("failed to remove file: %w", err)
-// 	}
-
-// 	logToFile("SUCCESS: File removed successfully - " + op.Path)
-// 	return nil
-// }
-
 func removeFile(op Operation) error {
 	if op.Path == "" {
 		logToFile("ERROR: Invalid remove operation, missing path")
-		return fmt.Errorf("invalid remove operation, missing path")
+		os.Exit(1)
 	}
 
 	// Step 1: Copy file to backup directory
 	backupPath := filepath.Join(backupDir, strings.ReplaceAll(op.Path, "/", "_"))
 	if err := os.MkdirAll(backupDir, 0755); err != nil {
 		logToFile("ERROR: Failed to create backup directory - " + err.Error())
-		return fmt.Errorf("failed to create backup directory: %w", err)
+		os.Exit(1)
 	}
 
 	if _, err := os.Stat(op.Path); err == nil {
 		logToFile("INFO: Copying file to backup: " + op.Path + " -> " + backupPath)
 		if err := copyFile(op.Path, backupPath); err != nil {
 			logToFile("ERROR: Failed to copy file to backup - " + err.Error())
-			return fmt.Errorf("failed to copy file to backup: %w", err)
+			os.Exit(1)
 		}
 
 		// Step 2: Verify checksum of copied file
 		backupChecksum, err := computeChecksum(backupPath)
 		if err != nil {
 			logToFile("ERROR: Failed to compute backup checksum - " + err.Error())
-			return fmt.Errorf("failed to compute backup checksum: %w", err)
+			os.Exit(1)
 		}
 
 		originalChecksum, err := computeChecksum(op.Path)
 		if err != nil {
 			logToFile("ERROR: Failed to compute original checksum - " + err.Error())
-			return fmt.Errorf("failed to compute original checksum: %w", err)
+			os.Exit(1)
 		}
 
 		if backupChecksum != originalChecksum {
 			logToFile("ERROR: Backup checksum mismatch for " + backupPath)
-			return fmt.Errorf("backup checksum mismatch: expected %s, got %s", originalChecksum, backupChecksum)
+			os.Exit(1)
 		}
 		logToFile("SUCCESS: File backed up successfully - " + backupPath)
 	} else if os.IsNotExist(err) {
 		logToFile("WARNING: File does not exist, skipping backup - " + op.Path)
 	} else {
 		logToFile("ERROR: Failed to check file existence - " + err.Error())
-		return fmt.Errorf("failed to check file existence: %w", err)
+		os.Exit(1)
 	}
 
 	// Step 3: Remove hash from integrity database and update folder-specific JSON
@@ -496,78 +459,6 @@ func modifyDefaults(op Operation) error {
 	logToFile("SUCCESS: .defaultvalues file updated")
 	return nil
 }
-
-// func updateIntegrityDatabase(filePath, hash string) (string, error) {
-// 	dir := filepath.Dir(filePath)
-// 	dbPath := filepath.Join(dir, ".db.json")
-
-// 	key, err := extractKeyFromImage()
-// 	if err != nil {
-// 		return "", fmt.Errorf("failed to extract key: %w", err)
-// 	}
-
-// 	var entries []IntegrityEntry
-// 	if _, err := os.Stat(dbPath); err == nil {
-// 		encryptedData, err := os.ReadFile(dbPath)
-// 		if err != nil {
-// 			return "", fmt.Errorf("failed to read encrypted db file: %w", err)
-// 		}
-
-// 		decryptedData, err := decryptFile(key, encryptedData)
-// 		if err != nil {
-// 			return "", fmt.Errorf("failed to decrypt db file: %w", err)
-// 		}
-
-// 		err = json.Unmarshal(decryptedData, &entries)
-// 		if err != nil {
-// 			return "", fmt.Errorf("failed to unmarshal db data: %w", err)
-// 		}
-// 	} else if !os.IsNotExist(err) {
-// 		return "", fmt.Errorf("failed to check db file existence: %w", err)
-// 	}
-
-// 	// Update or add new entry
-// 	updated := false
-// 	for i, entry := range entries {
-// 		if entry.Path == filePath {
-// 			entries[i].Hash = hash
-// 			updated = true
-// 			break
-// 		}
-// 	}
-// 	if !updated {
-// 		entries = append(entries, IntegrityEntry{
-// 			Path: filePath,
-// 			Hash: hash,
-// 		})
-// 	}
-
-// 	// Marshal updated data
-// 	updatedJSON, err := json.MarshalIndent(entries, "", "  ")
-// 	if err != nil {
-// 		return "", fmt.Errorf("failed to marshal updated db: %w", err)
-// 	}
-
-// 	// Encrypt and write back
-// 	encryptedData, err := encryptFile(key, updatedJSON)
-// 	if err != nil {
-// 		return "", fmt.Errorf("failed to encrypt updated db: %w", err)
-// 	}
-
-// 	err = os.WriteFile(dbPath, encryptedData, 0644)
-// 	if err != nil {
-// 		return "", fmt.Errorf("failed to write encrypted db: %w", err)
-// 	}
-
-// 	// Calculate hash of encrypted .db.json
-// 	dbHash, err := computeChecksum(dbPath)
-// 	if err != nil {
-// 		return "", fmt.Errorf("failed to compute db hash: %w", err)
-// 	}
-
-// 	logToFile("INFO: Integrity database updated for " + filePath)
-// 	return dbHash, nil
-// }
 
 func updateIntegrityDatabase(filePath, hash string) (string, error) {
 	dir := filepath.Dir(filePath)

@@ -43,7 +43,7 @@ type FolderEntry struct {
 	Hash string `json:"hash"`
 }
 
-const logFile = "/var/log/cxfw_patch.log"
+const logFile = "/newroot/var/log/cxfw_patch.log"
 
 func main() {
 	if len(os.Args) < 2 {

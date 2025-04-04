@@ -62,7 +62,7 @@ class FirmwarePatchCreator:
         restore_operations = []  # To store the reversal operations
 
          # Define backup directory
-        backup_dir = "/sda1/data/restore/backup/"
+        backup_dir = "/sda1/data/cxfw/rollback/"
 
         # Remove operations first
         for file_path in remove_files:
@@ -90,7 +90,7 @@ class FirmwarePatchCreator:
                 operations.append({
                     "operation": "add",
                     "path": target_dir,
-                    "source": "/tmp/" + os.path.basename(file_path),
+                    "source": "/tmp/patch/" + os.path.basename(file_path),
                     "checksum": checksum,
                     "size": file_size
                 })
